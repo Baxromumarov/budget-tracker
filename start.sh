@@ -2,7 +2,7 @@
 set -eu
 
 SERVICE="${SERVICE:-backend}"
-PORT="${PORT:-8080}"
+PORT="${PORT:-8000}"
 
 echo "🚀 Starting backend service..."
 cd backend

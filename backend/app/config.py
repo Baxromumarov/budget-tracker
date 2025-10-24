@@ -21,7 +21,12 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://postgres:postgres@db:5432/budget"
     api_prefix: str = "/api"
-    allow_origins: list[str] = ["http://localhost:5173"]
+    allow_origins: list[str] = [
+        "http://localhost:5173",
+        "https://budget-tracker-frontend.vercel.app",
+        "https://budget-tracker-frontend.up.railway.app",
+        "https://budget-tracker-front-production.up.railway.app",
+    ]
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
