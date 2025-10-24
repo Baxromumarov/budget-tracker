@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     allow_origins: list[str] = [
         "http://localhost:5173",
+        "http://localhost:8080",
+        "http://localhost:8000",
         "https://budget-tracker-frontend.vercel.app",
         "https://budget-tracker-frontend.up.railway.app",
         "https://budget-tracker-front-production.up.railway.app",
