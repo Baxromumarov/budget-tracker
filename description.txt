@@ -1,0 +1,184 @@
+Project Title: Expense Tracker / Budget Manager
+🧭 1. Project Overview
+
+The Expense Tracker is an object-oriented application that allows users to record, categorize, and analyze their personal financial transactions.
+The main goal is to help users track their income and expenses over time, view summaries by category, and export monthly reports for budgeting purposes.
+
+The system demonstrates core OOP principles such as encapsulation, inheritance, polymorphism, and abstraction, implemented through modular class design.
+
+⚙️ 2. Functional Requirements
+
+A user can add, edit, and delete transactions (income or expense).
+
+Each transaction must include:
+
+Amount
+
+Date
+
+Category (e.g., Food, Rent, Salary, Transport)
+
+Type (either Income or Expense)
+
+Optional note/description
+
+The system must calculate:
+
+Total income
+
+Total expenses
+
+Remaining balance (income − expenses)
+
+The user should be able to view:
+
+All transactions
+
+Filtered transactions (by category, date, or type)
+
+A monthly summary report
+
+The report should be exportable to CSV or JSON.
+
+🧱 3. Core Classes
+a) Transaction (Base Class)
+
+Represents a generic financial transaction.
+
+Attributes:
+
+id: int
+
+amount: float
+
+date: datetime
+
+category: string
+
+type: string (“income” or “expense”)
+
+description: string (optional)
+
+Methods:
+
+getDetails() – returns a formatted string with transaction info
+
+to_dict() – returns transaction data for export
+
+b) IncomeTransaction / ExpenseTransaction (Derived Classes)
+
+These classes inherit from Transaction and represent specific transaction types.
+
+Methods:
+
+Override getDetails() if necessary to display custom info.
+
+Allow category validation (e.g., income categories vs expense categories).
+
+OOP Principle:
+→ Demonstrates polymorphism (same method name, different behavior).
+
+c) User
+
+Represents a person using the system.
+
+Attributes:
+
+name: string
+
+email: string
+
+transactions: List[Transaction]
+
+Methods:
+
+addTransaction(Transaction t)
+
+removeTransaction(transactionId)
+
+getAllTransactions()
+
+getTransactionsByCategory(category)
+
+calculateBalance()
+
+OOP Principle:
+→ Encapsulation (user data and transactions are managed within the class).
+
+d) BudgetManager
+
+Manages all user interactions and reporting.
+
+Attributes:
+
+users: List[User] (optional if multi-user)
+
+reportGenerator: ReportGenerator
+
+Methods:
+
+addTransaction(user, transaction)
+
+generateMonthlyReport(user, month, year)
+
+exportReport(user, format)
+
+e) ReportGenerator (Abstract Class / Interface)
+
+Defines the interface for generating reports.
+
+Methods (abstract):
+
+generate(user, month, year) → returns summary string or dict
+
+Subclasses implement specific output formats:
+
+CSVReportGenerator
+
+JSONReportGenerator
+
+OOP Principle:
+→ Abstraction (report generation defined by an interface)
+→ Polymorphism (different implementations for each file format).
+
+📊 4. Example Features
+
+Add a new expense/income
+
+> Enter type (income/expense): expense
+> Enter category: Food
+> Enter amount: 25.5
+> Enter date: 2025-10-21
+> Enter description: Lunch
+
+
+View balance
+
+Total income: 4500.0
+Total expenses: 3120.0
+Balance: 1380.0
+
+
+Generate monthly report
+
+Report for October 2025
+------------------------
+Income: 4500.00
+Expenses: 3120.00
+Net Savings: 1380.00
+Top Category: Rent
+
+
+Export report
+
+To CSV → report_oct_2025.csv
+
+To JSON → report_oct_2025.json
+
+🧩 5. Object-Oriented Concepts Demonstrated
+Concept	Where Used
+Encapsulation	Data hidden inside User and Transaction classes
+Inheritance	IncomeTransaction and ExpenseTransaction inherit from Transaction
+Polymorphism	generate() behaves differently in CSV and JSON report classes
+Abstraction	ReportGenerator defines the report interface
+Composition	User contains many Transaction objects
