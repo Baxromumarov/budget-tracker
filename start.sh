@@ -18,10 +18,21 @@ case "$SERVICE" in
         exit 1
       fi
     fi
-    "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1 || true
-    "$PYTHON_BIN" -m pip install --upgrade pip
-    "$PYTHON_BIN" -m pip install -r requirements.txt
-    "$PYTHON_BIN" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+
+    if [ ! -d ".venv" ]; then
+      echo "📦 Creating virtual environment..."
+      "$PYTHON_BIN" -m venv .venv
+    fi
+
+    VENV_PY=".venv/bin/python"
+    if [ ! -x "$VENV_PY" ]; then
+      echo "❌ Virtual environment not created correctly."
+      exit 1
+    fi
+
+    "$VENV_PY" -m pip install --upgrade pip
+    "$VENV_PY" -m pip install -r requirements.txt
+    exec "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
     ;;
 
   frontend)
