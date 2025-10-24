@@ -10,13 +10,18 @@ case "$SERVICE" in
     cd backend
     PYTHON_BIN="$(command -v python3 || command -v python || true)"
     if [ -z "$PYTHON_BIN" ]; then
-      echo "❌ Python is not installed in the environment."
-      exit 1
+      echo "⚙️  Python not detected. Installing python3..."
+      apt-get update && apt-get install -y python3 python3-venv python3-pip
+      PYTHON_BIN="$(command -v python3 || true)"
+      if [ -z "$PYTHON_BIN" ]; then
+        echo "❌ Failed to install python3."
+        exit 1
+      fi
     fi
     "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1 || true
     "$PYTHON_BIN" -m pip install --upgrade pip
     "$PYTHON_BIN" -m pip install -r requirements.txt
-    uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+    "$PYTHON_BIN" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
     ;;
 
   frontend)
