@@ -10,11 +10,16 @@ from .domain.entities import (
     domain_transaction_from_model,
 )
 from .models import TransactionKind, TransactionModel, UserModel
-from .schemas import TransactionCreate, TransactionType, TransactionUpdate, UserCreate
+from .schemas import TransactionCreate, TransactionType, TransactionUpdate, UserRegister
 
 
-def create_user(db: Session, data: UserCreate) -> UserModel:
-    user = UserModel(name=data.name, email=data.email)
+def create_user(db: Session, data: UserRegister, password_hash: str) -> UserModel:
+    user = UserModel(
+        name=data.name,
+        username=data.username,
+        email=data.email,
+        password_hash=password_hash,
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -27,6 +32,10 @@ def get_user(db: Session, user_id: int) -> UserModel | None:
 
 def get_user_by_email(db: Session, email: str) -> UserModel | None:
     return db.scalar(select(UserModel).where(UserModel.email == email))
+
+
+def get_user_by_username(db: Session, username: str) -> UserModel | None:
+    return db.scalar(select(UserModel).where(UserModel.username == username))
 
 
 def list_users(db: Session) -> list[UserModel]:
@@ -158,4 +167,3 @@ def calculate_monthly_summary(db: Session, user_id: int, month: int, year: int) 
         "balance": float(balance),
         "top_category": top_category,
     }
-

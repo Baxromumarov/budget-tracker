@@ -6,22 +6,20 @@ from .. import crud
 from ..db import get_db
 from ..domain.entities import BudgetManager, CSVReportGenerator, JSONReportGenerator, User
 from ..schemas import MonthlySummary
+from ..models import UserModel
+from ..security import get_current_user
 
-router = APIRouter(prefix="/users/{user_id}", tags=["reports"])
+router = APIRouter(prefix="/me", tags=["reports"])
 
 
 @router.get("/summary", response_model=MonthlySummary)
 def get_monthly_summary(
-    user_id: int,
     month: int = Query(..., ge=1, le=12),
     year: int = Query(..., ge=2000),
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> MonthlySummary:
-    user = crud.get_user(db, user_id)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-
-    summary = crud.calculate_monthly_summary(db, user_id=user.id, month=month, year=year)
+    summary = crud.calculate_monthly_summary(db, user_id=current_user.id, month=month, year=year)
     return MonthlySummary(
         month=month,
         year=year,
@@ -34,25 +32,22 @@ def get_monthly_summary(
 
 @router.get("/reports/{format}", response_class=Response)
 def export_report(
-    user_id: int,
     format: str,
     month: int = Query(..., ge=1, le=12),
     year: int = Query(..., ge=2000),
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> Response:
     if format not in {"csv", "json"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported format.")
 
-    user_model = crud.get_user(db, user_id)
-    if not user_model:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-
-    transactions = crud.list_transactions(db, user_id=user_model.id)
+    transactions = crud.list_transactions(db, user_id=current_user.id)
     domain_transactions = [crud.build_domain_transaction(tx) for tx in transactions]
     domain_user = User(
-        id=user_model.id,
-        name=user_model.name,
-        email=user_model.email,
+        id=current_user.id,
+        name=current_user.name,
+        username=current_user.username,
+        email=current_user.email,
         transactions=domain_transactions,
     )
 
@@ -73,4 +68,3 @@ def export_report(
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-

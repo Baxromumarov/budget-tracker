@@ -8,27 +8,26 @@ interface Filters {
   end_date?: string;
 }
 
-export async function fetchTransactions(userId: number, filters: Filters = {}): Promise<Transaction[]> {
-  const response = await api.get<Transaction[]>(`/users/${userId}/transactions`, {
+export async function fetchTransactions(filters: Filters = {}): Promise<Transaction[]> {
+  const response = await api.get<Transaction[]>(`/me/transactions`, {
     params: filters,
   });
   return response.data;
 }
 
-export async function createTransaction(userId: number, input: TransactionInput): Promise<Transaction> {
-  const response = await api.post<Transaction>(`/users/${userId}/transactions`, input);
+export async function createTransaction(input: TransactionInput): Promise<Transaction> {
+  const response = await api.post<Transaction>(`/me/transactions`, input);
   return response.data;
 }
 
 export async function updateTransaction(
-  userId: number,
   transactionId: number,
   input: Partial<TransactionInput>
 ): Promise<Transaction> {
-  const response = await api.put<Transaction>(`/users/${userId}/transactions/${transactionId}`, input);
+  const response = await api.put<Transaction>(`/me/transactions/${transactionId}`, input);
   return response.data;
 }
 
-export async function deleteTransaction(userId: number, transactionId: number): Promise<void> {
-  await api.delete(`/users/${userId}/transactions/${transactionId}`);
+export async function deleteTransaction(transactionId: number): Promise<void> {
+  await api.delete(`/me/transactions/${transactionId}`);
 }

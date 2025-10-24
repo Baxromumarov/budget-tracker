@@ -1,5 +1,5 @@
-from datetime import date
-from typing import Literal
+from datetime import date, datetime
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -7,18 +7,40 @@ from pydantic import BaseModel, EmailStr, Field
 TransactionType = Literal["income", "expense"]
 
 
-class UserCreate(BaseModel):
+class UserRegister(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    email: EmailStr
+    username: str = Field(min_length=3, max_length=120)
+    email: Optional[EmailStr] = None
+    password: str = Field(min_length=8, max_length=128)
 
 
 class UserOut(BaseModel):
     id: int
     name: str
-    email: EmailStr
+    username: str
+    email: Optional[EmailStr] = None
+    created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class ProfileOut(UserOut):
+    pass
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class AuthResponse(Token):
+    user: UserOut
 
 
 class TransactionBase(BaseModel):
@@ -26,7 +48,7 @@ class TransactionBase(BaseModel):
     date: date
     category: str = Field(min_length=1, max_length=120)
     type: TransactionType
-    description: str | None = Field(default=None, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=255)
 
 
 class TransactionCreate(TransactionBase):
@@ -34,11 +56,11 @@ class TransactionCreate(TransactionBase):
 
 
 class TransactionUpdate(BaseModel):
-    amount: float | None = Field(default=None, gt=0)
-    date: date | None = None
-    category: str | None = Field(default=None, min_length=1, max_length=120)
-    type: TransactionType | None = None
-    description: str | None = Field(default=None, max_length=255)
+    amount: Optional[float] = Field(default=None, gt=0)
+    date: Optional[date] = None
+    category: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    type: Optional[TransactionType] = None
+    description: Optional[str] = Field(default=None, max_length=255)
 
 
 class TransactionOut(TransactionBase):
@@ -55,11 +77,4 @@ class MonthlySummary(BaseModel):
     total_income: float
     total_expenses: float
     balance: float
-    top_category: str | None
-
-
-class ReportResponse(BaseModel):
-    content: str
-    filename: str
-    media_type: str
-
+    top_category: Optional[str]

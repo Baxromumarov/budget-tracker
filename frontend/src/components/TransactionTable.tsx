@@ -19,13 +19,12 @@ export default function TransactionTable({ transactions, onEdit, onDelete }: Tra
   );
 
   if (!sorted.length) {
-    return <p>No transactions recorded yet. Start by adding one above.</p>;
+    return <p className="muted">No transactions recorded yet. Start by adding one above.</p>;
   }
 
   return (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>Transactions</h2>
-      <table>
+    <div className="table-wrapper">
+      <table className="data-table">
         <thead>
           <tr>
             <th>Date</th>
@@ -33,24 +32,28 @@ export default function TransactionTable({ transactions, onEdit, onDelete }: Tra
             <th>Category</th>
             <th>Amount</th>
             <th>Description</th>
-            <th style={{ width: "140px" }}>Actions</th>
+            <th style={{ width: "180px" }}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((transaction) => (
             <tr key={transaction.id}>
               <td>{format(new Date(transaction.date), "PP")}</td>
-              <td>{transaction.type}</td>
-              <td>{transaction.category}</td>
-              <td style={{ fontWeight: 600, color: transaction.type === "income" ? "#16a34a" : "#dc2626" }}>
+              <td>
+                <span className={`badge ${transaction.type}`}>{transaction.type}</span>
+              </td>
+              <td>
+                <span className="badge soft">{transaction.category}</span>
+              </td>
+              <td className={transaction.type === "income" ? "amount income" : "amount expense"}>
                 {transaction.type === "income" ? "+" : "-"}${transaction.amount.toFixed(2)}
               </td>
               <td>{transaction.description ?? "—"}</td>
-              <td style={{ display: "flex", gap: "0.5rem" }}>
+              <td className="table-actions">
                 <button className="btn secondary" onClick={() => onEdit(transaction)}>
                   Edit
                 </button>
-                <button className="btn secondary" onClick={() => void onDelete(transaction)}>
+                <button className="btn ghost" onClick={() => void onDelete(transaction)}>
                   Delete
                 </button>
               </td>

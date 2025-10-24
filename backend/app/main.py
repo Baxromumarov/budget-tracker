@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .db import Base, engine
-from .routers import reports, transactions, users
+from .routers import auth, reports, transactions, users
 
 settings = get_settings()
 
@@ -16,6 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(users.router, prefix=settings.api_prefix)
 app.include_router(transactions.router, prefix=settings.api_prefix)
 app.include_router(reports.router, prefix=settings.api_prefix)
@@ -30,4 +31,3 @@ def on_startup() -> None:
 @app.get("/")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
-

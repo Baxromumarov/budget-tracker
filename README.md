@@ -23,7 +23,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp ../.env.example .env  # adjust DATABASE_URL if needed
+cp ../.env.example .env  # set DATABASE_URL / JWT_SECRET as needed
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -31,14 +31,15 @@ The API becomes available at `http://localhost:8000`. Interactive docs live at `
 
 ### Key Endpoints
 
-- `POST /api/users` – Create a user.
-- `GET /api/users/{user_id}` – Retrieve profile details.
-- `POST /api/users/{user_id}/transactions` – Add income or expense.
-- `GET /api/users/{user_id}/transactions` – List and filter transactions.
-- `PUT /api/users/{user_id}/transactions/{transaction_id}` – Update an entry.
-- `DELETE /api/users/{user_id}/transactions/{transaction_id}` – Remove an entry.
-- `GET /api/users/{user_id}/summary?month=10&year=2025` – Monthly roll-up (income, expenses, balance, top category).
-- `GET /api/users/{user_id}/reports/{format}?month=10&year=2025` – Download CSV/JSON exports.
+- `POST /api/auth/register` – Create an account (name, username, optional email, password).
+- `POST /api/auth/login` – Exchange credentials for a JWT access token.
+- `GET /api/users/me` – Return the authenticated user profile.
+- `GET /api/me/transactions` – List and filter the current user's transactions.
+- `POST /api/me/transactions` – Add a new income/expense entry.
+- `PUT /api/me/transactions/{transaction_id}` – Update an existing entry.
+- `DELETE /api/me/transactions/{transaction_id}` – Delete an entry.
+- `GET /api/me/summary?month=10&year=2025` – Monthly roll-up (income, expenses, balance, top category).
+- `GET /api/me/reports/{format}?month=10&year=2025` – Download CSV/JSON exports for the selected month.
 
 ### Data Model & OOP Mapping
 
@@ -68,11 +69,11 @@ VITE_API_URL="https://your-api.example.com/api" npm run build
 
 ### Features
 
-- User onboarding (create/select users).
-- Transaction CRUD with quick category chips.
-- Interactive filters (category, type, date range).
-- Monthly summaries with balance/income/expense/top category cards.
-- One-click CSV/JSON downloads backed by the domain report generators.
+- Registration & login landing pages backed by JWT authentication.
+- Personalised dashboard with profile card, monthly overview, and logout control.
+- Transaction CRUD with quick category chips, smarter filters, and improved table styling.
+- Real-time monthly summaries with balance/income/expense/top category cards.
+- One-click CSV/JSON downloads powered by the domain report generators.
 
 ## Docker Deployment
 
@@ -95,13 +96,14 @@ Override environment values by creating a `.env` file (based on `.env.example`) 
 Currently there are no automated tests. Recommended smoke checks:
 
 1. Start the stack (`docker compose up --build`).
-2. Visit `http://localhost:5173`, create a user, add transactions, and verify summary updates in real time.
-3. Download CSV/JSON reports and inspect the contents.
-4. Hit `http://localhost:8000/docs` to explore and test endpoints directly.
+2. Visit `http://localhost:5173`, register a new account, and verify login redirects to the dashboard.
+3. Add, edit, and delete transactions; confirm the table and monthly summary update immediately.
+4. Export CSV/JSON reports for the active month and inspect the files.
+5. Hit `http://localhost:8000/docs` to explore and test endpoints directly (authorise with the JWT returned from login).
 
 ## Next Steps
 
-- Add authentication and per-user sessions.
+- Add refresh tokens or session revocation lists for stronger security.
 - Introduce automated unit/integration tests (e.g., pytest & React Testing Library).
 - Extend reporting (e.g., yearly dashboards, charts).
 - Integrate background job processing for scheduled exports or alerts.

@@ -8,13 +8,21 @@ export interface TransactionFormProps {
   onCancel?: () => void;
 }
 
-const initialForm: TransactionInput = {
-  amount: 0,
+type TransactionFormState = {
+  amount: string;
+  date: string;
+  category: string;
+  type: TransactionType;
+  description: string;
+};
+
+const getInitialForm = (): TransactionFormState => ({
+  amount: "",
   date: new Date().toISOString().substring(0, 10),
   category: "",
   type: "expense",
   description: "",
-};
+});
 
 const categories: Record<TransactionType, string[]> = {
   income: ["Salary", "Freelance", "Investments", "Gift"],
@@ -22,12 +30,30 @@ const categories: Record<TransactionType, string[]> = {
 };
 
 export default function TransactionForm({ onSubmit, loading, defaultValues, onCancel }: TransactionFormProps) {
-  const [form, setForm] = useState<TransactionInput>(defaultValues ?? initialForm);
+  const [form, setForm] = useState<TransactionFormState>(() =>
+    defaultValues
+      ? {
+          amount: defaultValues.amount ? String(defaultValues.amount) : "",
+          date: defaultValues.date,
+          category: defaultValues.category,
+          type: defaultValues.type,
+          description: defaultValues.description ?? "",
+        }
+      : getInitialForm()
+  );
   const [errors, setErrors] = useState<string | null>(null);
 
   useEffect(() => {
     if (defaultValues) {
-      setForm(defaultValues);
+      setForm({
+        amount: defaultValues.amount ? String(defaultValues.amount) : "",
+        date: defaultValues.date,
+        category: defaultValues.category,
+        type: defaultValues.type,
+        description: defaultValues.description ?? "",
+      });
+    } else {
+      setForm(getInitialForm());
     }
   }, [defaultValues]);
 
@@ -35,26 +61,30 @@ export default function TransactionForm({ onSubmit, loading, defaultValues, onCa
     const { name, value } = event.target;
     setForm((prev) => ({
       ...prev,
-      [name]: name === "amount" ? parseFloat(value || "0") : value,
+      [name]: value,
     }));
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!form.category || !form.amount || !form.date) {
-      setErrors("Please fill in all required fields.");
+    const amountValue = parseFloat(form.amount);
+
+    if (!form.category.trim() || Number.isNaN(amountValue) || amountValue <= 0 || !form.date) {
+      setErrors("Please provide a positive amount, category, and date.");
       return;
     }
+
     setErrors(null);
     await onSubmit({
-      amount: form.amount,
+      amount: amountValue,
       date: form.date,
-      category: form.category,
+      category: form.category.trim(),
       type: form.type,
-      description: form.description ?? "",
+      description: form.description ? form.description.trim() : "",
     });
+
     if (!defaultValues) {
-      setForm(initialForm);
+      setForm(getInitialForm());
     }
   };
 
@@ -72,6 +102,7 @@ export default function TransactionForm({ onSubmit, loading, defaultValues, onCa
             step="0.01"
             value={form.amount}
             onChange={handleChange}
+            placeholder="0.00"
             required
           />
         </label>
@@ -112,7 +143,7 @@ export default function TransactionForm({ onSubmit, loading, defaultValues, onCa
 
       <label>
         Description
-        <textarea name="description" rows={3} value={form.description ?? ""} onChange={handleChange} />
+        <textarea name="description" rows={3} value={form.description} onChange={handleChange} />
       </label>
 
       {errors && <p style={{ color: "#dc2626", margin: 0 }}>{errors}</p>}

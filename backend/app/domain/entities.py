@@ -59,7 +59,8 @@ class User:
 
     id: int | None
     name: str
-    email: str
+    username: str
+    email: str | None
     transactions: list[Transaction] = field(default_factory=list)
 
     def add_transaction(self, transaction: Transaction) -> None:
