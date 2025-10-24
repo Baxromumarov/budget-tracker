@@ -1,5 +1,5 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 SERVICE="${SERVICE:-backend}"
 PORT="${PORT:-8000}"
@@ -8,8 +8,13 @@ case "$SERVICE" in
   backend)
     echo "🚀 Starting backend service..."
     cd backend
-    pip install --upgrade pip
-    pip install -r requirements.txt
+    if command -v pip3 >/dev/null 2>&1; then
+      PIP_CMD="pip3"
+    else
+      PIP_CMD="pip"
+    fi
+    "$PIP_CMD" install --upgrade pip
+    "$PIP_CMD" install -r requirements.txt
     uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
     ;;
 
