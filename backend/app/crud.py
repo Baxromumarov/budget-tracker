@@ -9,7 +9,7 @@ from .domain.entities import (
     Transaction,
     domain_transaction_from_model,
 )
-from .models import TransactionKind, TransactionModel, UserModel
+from .models import TelegramProfileModel, TransactionKind, TransactionModel, UserModel
 from .schemas import TransactionCreate, TransactionType, TransactionUpdate, UserRegister
 
 
@@ -36,6 +36,12 @@ def get_user_by_email(db: Session, email: str) -> UserModel | None:
 
 def get_user_by_username(db: Session, username: str) -> UserModel | None:
     return db.scalar(select(UserModel).where(UserModel.username == username))
+
+def get_user_by_telegram_id(db: Session, telegram_id: str) -> UserModel | None:
+    profile = db.scalar(
+        select(TelegramProfileModel).where(TelegramProfileModel.telegram_id == telegram_id)
+    )
+    return profile.user if profile else None
 
 
 def list_users(db: Session) -> list[UserModel]:
@@ -123,6 +129,49 @@ def hydrate_user_with_transactions(db: Session, user: UserModel) -> tuple:
     transactions = list_transactions(db, user.id)
     domain_transactions = [build_domain_transaction(tx) for tx in transactions]
     return user, domain_transactions
+
+
+def get_telegram_profile(db: Session, telegram_id: str) -> TelegramProfileModel | None:
+    return db.scalar(
+        select(TelegramProfileModel).where(TelegramProfileModel.telegram_id == telegram_id)
+    )
+
+
+def create_telegram_profile(
+    db: Session,
+    user: UserModel,
+    telegram_id: str,
+    username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+    language_code: str | None,
+) -> TelegramProfileModel:
+    profile = TelegramProfileModel(
+        user_id=user.id,
+        telegram_id=telegram_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
+        language_code=language_code,
+    )
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+def update_telegram_profile(
+    db: Session,
+    profile: TelegramProfileModel,
+    **changes: object,
+) -> TelegramProfileModel:
+    for key, value in changes.items():
+        if hasattr(profile, key) and value is not None:
+            setattr(profile, key, value)
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return profile
 
 
 def calculate_monthly_summary(db: Session, user_id: int, month: int, year: int) -> dict[str, float | None]:

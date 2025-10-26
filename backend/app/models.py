@@ -38,6 +38,9 @@ class UserModel(Base):
     transactions: Mapped[list["TransactionModel"]] = relationship(
         "TransactionModel", back_populates="user", cascade="all, delete-orphan"
     )
+    telegram_profile: Mapped["TelegramProfileModel"] = relationship(
+        "TelegramProfileModel", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
@@ -71,3 +74,22 @@ class TransactionModel(Base):
     @type.setter
     def type(self, value: str) -> None:
         self.kind = TransactionKind(value)
+
+
+class TelegramProfileModel(Base):
+    __tablename__ = "telegram_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    telegram_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    language_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    last_interaction_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped[UserModel] = relationship("UserModel", back_populates="telegram_profile")

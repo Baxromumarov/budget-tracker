@@ -1,8 +1,10 @@
 from functools import lru_cache
+import json
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 
 _ENV_CANDIDATES = (
     Path(__file__).resolve().parent.parent.parent / ".env",
@@ -21,19 +23,40 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://postgres:postgres@db:5432/budget"
     api_prefix: str = "/api"
-    allow_origins: list[str] = [
-        "http://localhost:5173",
-        "http://localhost:8080",
-        "http://localhost:8000",
-        "https://budget-tracker-frontend.vercel.app",
-        "https://budget-tracker-frontend.up.railway.app",
-        "https://budget-tracker-front-production.up.railway.app",
-    ]
+    allow_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://localhost:8080",
+            "http://localhost:8000",
+            "https://budget-tracker-frontend.vercel.app",
+            "https://budget-tracker-frontend.up.railway.app",
+            "https://budget-tracker-front-production.up.railway.app",
+        ]
+    )
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
+    telegram_bot_token: str | None = None
+    openai_api_key: str | None = None
+    default_currency: str = "USD"
+    ai_model: str = "gpt-4o-mini"
 
     model_config = SettingsConfigDict(env_file=None)
+
+    @field_validator("allow_origins", mode="before")
+    @classmethod
+    def parse_allow_origins(cls, value: object) -> list[str]:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    pass
+            return [item.strip() for item in stripped.split(",") if item.strip()]
+        if isinstance(value, (list, tuple)):
+            return [str(item) for item in value]
+        raise ValueError("Invalid allow_origins format.")
 
 
 @lru_cache

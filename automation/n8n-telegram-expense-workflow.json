@@ -1,0 +1,331 @@
+{
+  "name": "Telegram Expense Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "binaryProperty": "data",
+        "downloadFile": true
+      },
+      "name": "Get the Image",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        20
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json[\"message\"][\"photo\"] ? 'photo' : 'text' }}",
+        "rules": [
+          {
+            "operation": "equals",
+            "value2": "photo"
+          }
+        ]
+      },
+      "name": "Switch (image or not)",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "get",
+        "fileId": "={{ $json[\"message\"][\"photo\"][length($json[\"message\"][\"photo\"]) - 1][\"file_id\"] }}"
+      },
+      "name": "Download image",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        -120
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chatCompletion",
+        "operation": "create",
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Extract merchant, total amount (number), currency, purchase date (ISO-8601), and a short description from the provided receipt image. Respond with JSON: {\"amount\": number, \"currency\": string | null, \"date\": string | null, \"description\": string | null}."
+          },
+          {
+            "role": "user",
+            "content": "={{ $binary.data }}",
+            "additionalFields": {
+              "type": "image"
+            }
+          }
+        ]
+      },
+      "name": "Analyze image",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [
+        20,
+        -120
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeBy": "index"
+      },
+      "name": "Merge branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chatCompletion",
+        "operation": "create",
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are an expense classifier. Choose the best category from [\"Food\",\"Transport\",\"Rent\",\"Utilities\",\"Entertainment\",\"Health\",\"Income\",\"Other\"]. Reply with JSON: {\"category\": string, \"type\": \"income\" | \"expense\", \"confidence\": number between 0 and 1}."
+          },
+          {
+            "role": "user",
+            "content": "={{ $json[\"text_payload\"] }}"
+          }
+        ]
+      },
+      "name": "Categorize expenses",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [
+        460,
+        -40
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "transactions",
+        "columns": [
+          "user_id",
+          "amount",
+          "date",
+          "category",
+          "kind",
+          "description"
+        ],
+        "additionalFields": {
+          "returning": "id"
+        }
+      },
+      "name": "Insert rows in a table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        680,
+        -40
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_PG_CREDENTIAL_ID",
+          "name": "Budget Tracker DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json[\"message\"][\"chat\"][\"id\"] }}",
+        "text": "={{ `Logged ${$json[\"category\"]} expense of ${$json[\"amount\"]}. Confidence: ${($json[\"confidence\"] * 100).toFixed(0)}%.` }}"
+      },
+      "name": "Respond on telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        900,
+        -40
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "passThrough",
+        "output": "input1"
+      },
+      "name": "Prepare text payload",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "text_payload",
+              "value": "={{ $json[\"message\"][\"text\"] }}"
+            }
+          ]
+        }
+      },
+      "name": "Structure text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        20,
+        140
+      ]
+    }
+  ],
+  "connections": {
+    "Get the Image": {
+      "main": [
+        [
+          {
+            "node": "Switch (image or not)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare text payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch (image or not)": {
+      "main": [
+        [
+          {
+            "node": "Download image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Structure text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download image": {
+      "main": [
+        [
+          {
+            "node": "Analyze image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze image": {
+      "main": [
+        [
+          {
+            "node": "Merge branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structure text": {
+      "main": [
+        [
+          {
+            "node": "Merge branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge branches": {
+      "main": [
+        [
+          {
+            "node": "Categorize expenses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Categorize expenses": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert rows in a table": {
+      "main": [
+        [
+          {
+            "node": "Respond on telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "staticData": null,
+  "pinData": {},
+  "id": "telegram-expense-intake-template"
+}

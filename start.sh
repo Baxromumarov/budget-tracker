@@ -4,22 +4,24 @@ set -eu
 SERVICE="${SERVICE:-backend}"
 PORT="${PORT:-8000}"
 
-echo "🚀 Starting backend service..."
+echo "🚀 Preparing environment with uv..."
 cd backend
-PYTHON_BIN="$(command -v python3 || command -v python || true)"
-if [ -z "$PYTHON_BIN" ]; then
-  echo "⚙️  Python not detected. Installing python3..."
-  apt-get update && apt-get install -y python3 python3-venv python3-pip
-  PYTHON_BIN="$(command -v python3 || true)"
-  if [ -z "$PYTHON_BIN" ]; then
-    echo "❌ Failed to install python3."
-    exit 1
-  fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "⚙️  uv not detected. Installing..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
+UV_BIN="$(command -v uv || true)"
+if [ -z "$UV_BIN" ]; then
+  echo "❌ Failed to install uv."
+  exit 1
 fi
 
 if [ ! -d ".venv" ]; then
-  echo "📦 Creating virtual environment..."
-  "$PYTHON_BIN" -m venv .venv
+  echo "📦 Creating virtual environment with uv..."
+  "$UV_BIN" venv .venv
 fi
 
 VENV_PY=".venv/bin/python"
@@ -28,6 +30,20 @@ if [ ! -x "$VENV_PY" ]; then
   exit 1
 fi
 
-"$VENV_PY" -m pip install --upgrade pip
-"$VENV_PY" -m pip install -r requirements.txt
-exec "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+echo "📚 Installing dependencies..."
+"$UV_BIN" pip install --python "$VENV_PY" -r requirements.txt
+
+case "$SERVICE" in
+  backend)
+    echo "🌐 Launching API on port $PORT..."
+    exec "$VENV_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+    ;;
+  telegram-bot|bot)
+    echo "🤖 Starting Telegram bot..."
+    exec "$VENV_PY" -m app.telegram_bot
+    ;;
+  *)
+    echo "❌ Unknown SERVICE value: $SERVICE"
+    exit 1
+    ;;
+esac

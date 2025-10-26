@@ -19,15 +19,45 @@ Full-stack expense tracking platform based on the provided project brief. The sy
 ### Local setup
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp ../.env.example .env  # set DATABASE_URL / JWT_SECRET as needed
-uvicorn app.main:app --reload --port 8000
+curl -LsSf https://astral.sh/uv/install.sh | sh  # install uv once
+export PATH="$HOME/.local/bin:$PATH"
+cp .env .env.local  # optional: customise configuration
+./start.sh  # creates .venv via uv and launches uvicorn on port 8000
 ```
 
 The API becomes available at `http://localhost:8000`. Interactive docs live at `http://localhost:8000/docs`.
+
+#### Manual commands
+
+If you prefer to manage the environment manually:
+
+```bash
+uv venv backend/.venv
+uv pip install --python backend/.venv/bin/python -r backend/requirements.txt
+uv run --python backend/.venv/bin/python --cwd backend uvicorn app.main:app --reload --port 8000
+```
+
+### Environment variables
+
+The backend reads configuration from `.env` or your shell:
+
+- `DATABASE_URL` – Postgres connection string.
+- `JWT_SECRET` / `JWT_ALGORITHM` – JWT signing configuration.
+- `ACCESS_TOKEN_EXPIRE_MINUTES` – Session lifetime in minutes.
+- `ALLOW_ORIGINS` – CORS allow-list (JSON string or comma-separated list).
+- `TELEGRAM_BOT` – Telegram bot token from @BotFather.
+- `OPENAI_API_KEY` – Required for AI-powered parsing (text and receipts).
+- `DEFAULT_CURRENCY` – Display currency used in bot messages.
+- `AI_MODEL` – OpenAI Responses model name (defaults to `gpt-4o-mini`).
+
+### Linting
+
+Ruff enforces code quality and import hygiene:
+
+```bash
+uv pip install --python backend/.venv/bin/python -r backend/requirements-dev.txt
+uv run --python backend/.venv/bin/python ruff check backend
+```
 
 ### Key Endpoints
 
@@ -107,3 +137,17 @@ Currently there are no automated tests. Recommended smoke checks:
 - Introduce automated unit/integration tests (e.g., pytest & React Testing Library).
 - Extend reporting (e.g., yearly dashboards, charts).
 - Integrate background job processing for scheduled exports or alerts.
+
+## Telegram Bot
+
+- Start with `SERVICE=bot ./start.sh` (or `SERVICE=telegram-bot ./start.sh`) after configuring `TELEGRAM_BOT` and `OPENAI_API_KEY`.
+- Auto-onboards Telegram users into the main database and links their chat metadata.
+- Understands free-form text and receipt photos using OpenAI, with keyword fallbacks when AI is unavailable.
+- Auto-categorises expenses/income, stores confidence markers, and highlights low-confidence imports in the description.
+- Provides `/report`, `/recent`, and `/help` commands plus inline buttons for current, 3, 6, and 12-month summaries or year-to-date stats.
+- Replies with multi-month breakdowns, top categories, and the currency noted in the receipt when it differs from `DEFAULT_CURRENCY`.
+
+## Automation
+
+- Prefer the built-in bot for turnkey automation. For visual orchestration or extra steps (e.g., CRM sync), leverage the n8n workflow in `docs/automation/telegram-expense-bot.md`.
+- Import the template `automation/n8n-telegram-expense-workflow.json`, supply credentials, and n8n will handle AI extraction + Postgres inserts alongside your custom nodes.
