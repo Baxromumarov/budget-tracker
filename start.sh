@@ -9,6 +9,53 @@ cd backend
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
+ensure_python() {
+  local py_bin
+  py_bin="$(command -v python3 || command -v python || true)"
+  if [ -n "$py_bin" ]; then
+    echo "$py_bin"
+    return 0
+  fi
+
+  echo "⚙️  Python not detected. Attempting installation..."
+  if command -v apt-get >/dev/null 2>&1; then
+    if ! apt-get update; then
+      echo "ℹ️  apt-get update failed."
+      return 1
+    fi
+    if ! apt-get install -y python3 python3-venv python3-pip; then
+      echo "ℹ️  apt-get install failed."
+      return 1
+    fi
+  elif command -v apk >/dev/null 2>&1; then
+    if ! apk add --no-cache python3 py3-pip; then
+      echo "ℹ️  apk add failed."
+      return 1
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    if ! dnf install -y python3 python3-pip; then
+      echo "ℹ️  dnf install failed."
+      return 1
+    fi
+  elif command -v yum >/dev/null 2>&1; then
+    if ! yum install -y python3 python3-pip; then
+      echo "ℹ️  yum install failed."
+      return 1
+    fi
+  else
+    echo "ℹ️  No supported package manager found to install Python automatically."
+    return 1
+  fi
+
+  py_bin="$(command -v python3 || command -v python || true)"
+  if [ -z "$py_bin" ]; then
+    echo "❌ Unable to install Python automatically. Please install Python 3 and rerun."
+    return 1
+  fi
+  echo "$py_bin"
+  return 0
+}
+
 ensure_uv() {
   if command -v uv >/dev/null 2>&1; then
     return 0
@@ -19,10 +66,14 @@ ensure_uv() {
     curl -LsSf https://astral.sh/uv/install.sh | sh
   elif command -v wget >/dev/null 2>&1; then
     wget -qO- https://astral.sh/uv/install.sh | sh
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -m pip install --user --upgrade uv
-  elif command -v python >/dev/null 2>&1; then
-    python -m pip install --user --upgrade uv
+  elif [ -n "$PYTHON_BOOTSTRAP" ]; then
+    if ! "$PYTHON_BOOTSTRAP" -m pip --version >/dev/null 2>&1; then
+      "$PYTHON_BOOTSTRAP" -m ensurepip --upgrade >/dev/null 2>&1 || true
+    fi
+    if ! "$PYTHON_BOOTSTRAP" -m pip install --user --upgrade uv; then
+      echo "ℹ️  pip install uv failed."
+      return 1
+    fi
   else
     echo "ℹ️  No curl/wget/python available to bootstrap uv."
     return 1
@@ -31,6 +82,16 @@ ensure_uv() {
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
   command -v uv >/dev/null 2>&1
 }
+
+PYTHON_BOOTSTRAP="$(command -v python3 || command -v python || true)"
+if [ -z "$PYTHON_BOOTSTRAP" ]; then
+  if PYTHON_BOOTSTRAP="$(ensure_python)"; then
+    :
+  else
+    echo "❌ Python is required to continue."
+    exit 1
+  fi
+fi
 
 if ensure_uv; then
   USE_UV=1
@@ -81,8 +142,10 @@ case "$SERVICE" in
     cat <<'EOF'
 Bot controls:
 • Send text such as "Coffee 5.20" or drop a receipt photo.
-• Commands: /report for summaries, /recent for last entries, /help for tips.
-• Inline buttons offer quick monthly breakdowns.
+• I auto-detect category/type/amount and store it against your Telegram profile.
+• Commands: /report for summaries by period, /recent for last entries, /help for tips.
+• Drop receipts without text—the bot reads them via GPT-4o.
+• Inline buttons offer quick monthly breakdowns (1, 3, 6, 12 months, YTD).
 EOF
     exec "$VENV_PY" -m app.telegram_bot
     ;;
