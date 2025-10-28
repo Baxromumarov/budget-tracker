@@ -173,6 +173,45 @@ AMOUNT_KEYWORD_WEIGHTS = {
     "cgst": 150,
 }
 
+SUBTOTAL_PENALTY_KEYWORDS = {"sub total", "subtotal", "total qty", "qty"}
+FINAL_TOTAL_CUES = {
+    "total",
+    "total:",
+    "grand total",
+    "amount due",
+    "balance due",
+    "total due",
+    "amount payable",
+    "total payable",
+    "due amount",
+}
+
+ADDRESS_NOISE_TOKENS = {
+    "address",
+    "avenue",
+    "branch",
+    "building",
+    "city",
+    "company",
+    "contact",
+    "email",
+    "faridabad",
+    "fax",
+    "gstin",
+    "limited",
+    "ltd",
+    "mobile",
+    "number",
+    "phone",
+    "private",
+    "sector",
+    "state",
+    "street",
+    "tel",
+    "telephone",
+    "zip",
+}
+
 REPORT_PRESETS: dict[str, int] = {
     "report:1": 1,   # current month
     "report:3": 3,   # last 3 months
@@ -359,10 +398,18 @@ def _call_openai_structured(text: str) -> dict[str, Any] | None:
         return None
 
     instructions = (
-        "You extract structured expense data from receipts or chat messages. "
-        "Return ONLY valid JSON matching this schema: {\"amount\": number, \"currency\": string|null, \"type\": \"expense\"|\"income\", \"category\": string|null, \"description\": string|null, \"date\": string|null}. "
-        "Interpret shorthand like 2k=2000 or 1.5m=1500000, and detect currency symbols/codes returning ISO codes (USD, EUR, INR, UZS, etc.). "
-        "Use ISO dates (YYYY-MM-DD), default type to \"expense\" unless clearly income, and keep description <=120 characters."
+        "You are an expense-extraction assistant. "
+        "Return ONLY valid JSON in this schema: "
+        "{\"amount\": number, \"currency\": string|null, \"type\": \"expense\"|\"income\", "
+        "\"category\": string|null, \"description\": string|null, \"date\": string|null}. "
+        "Interpret shorthand like 2k=2000 or 1.5m=1500000. "
+        "Detect currency symbols or context words and return ISO codes (INR, USD, EUR, etc.). "
+        "Use ISO dates (YYYY-MM-DD). "
+        "Pick the *final payable amount* (labelled total / grand total / balance due). "
+        "If multiple totals exist, cross-check them: choose the one that fits logically with subtotal + taxes. "
+        "NEVER invent digits; prefer smaller realistic totals for restaurant receipts (<2000 INR unless stated otherwise). "
+        "If receipt shows GST, assume currency = INR. "
+        "Do not output any explanatory text — JSON only."
     )
 
     try:
@@ -374,37 +421,55 @@ def _call_openai_structured(text: str) -> dict[str, Any] | None:
             ],
             temperature=0,
         )
+
         content = response.choices[0].message.content or ""
-        start = content.find("{")
-        end = content.rfind("}")
+        start, end = content.find("{"), content.rfind("}")
         if start == -1 or end == -1:
             raise ValueError("No JSON object in OpenAI response")
-        payload = content[start : end + 1]
-        data = json.loads(payload)
+
+        data = json.loads(content[start:end + 1])
+
+        # ----- Post-processing sanity checks -----
         amount = data.get("amount")
         if amount is not None:
             try:
-                data["amount"] = round(float(amount), 2)
+                val = round(float(amount), 2)
+                # sanity: discard improbable restaurant totals
+                if val > 5000:
+                    logger.warning("Unrealistic total detected (%.2f), lowering confidence.", val)
+                    data["confidence"] = 0.5
+                data["amount"] = val
             except (TypeError, ValueError):
                 data["amount"] = None
+
+        # Date normalization
         if data.get("date"):
             try:
                 data["date"] = date.fromisoformat(str(data["date"])[:10]).isoformat()
             except ValueError:
                 data["date"] = None
-        data["description"] = ""
-        if not data.get("type"):
-            data["type"] = "expense"
-        if data.get("currency"):
+
+        # Description and type defaults
+        data["description"] = data.get("description", "")[:120]
+        data["type"] = data.get("type") or "expense"
+
+        # Improved currency detection
+        text_upper = text.upper()
+        if "INR" in text_upper or "₹" in text or "GST" in text_upper:
+            data["currency"] = "INR"
+        elif data.get("currency"):
             data["currency"] = str(data["currency"]).upper()
         else:
             data["currency"] = _detect_currency(text) or settings.default_currency
-        data["confidence"] = 0.9
+
+        data.setdefault("confidence", 0.9)
         logger.info("OpenAI refined data: %s", data)
         return data
+
     except (OpenAIError, json.JSONDecodeError, ValueError, KeyError) as exc:
         logger.error("OpenAI parsing failed: %s", exc)
         return None
+
 
 
 def _normalise_amount(raw: str) -> float | None:
@@ -439,8 +504,7 @@ def _extract_amount_from_text(text: str) -> tuple[float | None, float]:
         r"(\d{1,3}(?:[,\s]\d{3})+(?:\.\d{1,2})|\d+(?:\.\d{1,2})?)(?:\s*([kmb]))?",
         re.IGNORECASE,
     )
-    best_value: float | None = None
-    best_score = float("-inf")
+    amount_candidates: list[dict[str, float | int | bool]] = []
 
     lines = text.splitlines()
     length = len(lines)
@@ -450,9 +514,12 @@ def _extract_amount_from_text(text: str) -> tuple[float | None, float]:
             continue
         lower = line.lower()
         keyword_bonus = 0
+        tokens = set(re.findall(r"[A-Za-z]+", lower))
         for keyword, weight in AMOUNT_KEYWORD_WEIGHTS.items():
             if keyword in lower:
                 keyword_bonus = max(keyword_bonus, weight)
+        if any(phrase in lower for phrase in SUBTOTAL_PENALTY_KEYWORDS):
+            keyword_bonus -= 400
         for match in pattern.finditer(line):
             base_value = match.group(1)
             suffix = match.group(2) or ""
@@ -465,7 +532,21 @@ def _extract_amount_from_text(text: str) -> tuple[float | None, float]:
                 continue
             if value > 1_000_000:
                 continue
-            tokens = set(re.findall(r"[A-Za-z]+", lower))
+            if (
+                len(digits_only) >= 5
+                and "." not in token
+                and not suffix
+                and keyword_bonus == 0
+                and tokens & ADDRESS_NOISE_TOKENS
+            ):
+                continue
+            if (
+                "." not in token
+                and not suffix
+                and len(digits_only) <= 4
+                and tokens & ADDRESS_NOISE_TOKENS
+            ):
+                continue
             if {"approval", "auth", "authorization"} & tokens:
                 continue
             if 1800 <= value <= 2100 and {"date", "terminal", "time", "am", "pm"} & tokens:
@@ -480,14 +561,38 @@ def _extract_amount_from_text(text: str) -> tuple[float | None, float]:
             if value >= 10_000 and keyword_bonus == 0:
                 score *= 0.6
             score += keyword_bonus
+            if "." in token:
+                score += 20
+            if any(phrase in lower for phrase in SUBTOTAL_PENALTY_KEYWORDS):
+                score *= 0.6
             score += (length - idx) * 2
-            if score > best_score:
-                best_score = score
-                best_value = value
-    if best_value is None:
+            is_final_total = any(cue in lower for cue in FINAL_TOTAL_CUES) and not any(
+                phrase in lower for phrase in SUBTOTAL_PENALTY_KEYWORDS
+            )
+            amount_candidates.append(
+                {
+                    "value": value,
+                    "score": score,
+                    "index": idx,
+                    "is_final": is_final_total,
+                    "has_keyword": keyword_bonus > 0 or "." in token,
+                }
+            )
+    if not amount_candidates:
         return None, 0.0
-    confidence = 0.9 if keyword_bonus else 0.65
-    return best_value, confidence
+    best_candidate = max(amount_candidates, key=lambda item: float(item["score"]))
+    final_candidates = [item for item in amount_candidates if item["is_final"]]
+    if final_candidates and not best_candidate["is_final"]:
+        best_final = max(final_candidates, key=lambda item: (float(item["score"]), -int(item["index"])))
+        if (
+            float(best_final["score"]) >= 0.6 * float(best_candidate["score"])
+            or float(best_final["value"]) <= float(best_candidate["value"]) * 1.1
+        ):
+            best_candidate = best_final
+    confidence = 0.9 if best_candidate["has_keyword"] else 0.65
+    if best_candidate["is_final"]:
+        confidence = max(confidence, 0.9)
+    return float(best_candidate["value"]), confidence
 
 
 def _extract_date_from_text(text: str) -> str | None:
@@ -602,7 +707,11 @@ def _merge_results(ai_data: dict[str, Any] | None, heuristic_data: dict[str, Any
         ai_amount = float(ai_data.get("amount", 0.0) or 0.0)
         heuristic_amount = float(heuristic_data.get("amount", 0.0) or 0.0)
         significant_gap = abs(ai_amount - heuristic_amount) > max(5.0, 0.1 * max(ai_amount, 1.0))
-        if heuristic_conf < 0.75 or significant_gap:
+        if significant_gap:
+            if heuristic_conf >= 0.6:
+                return heuristic_data
+            return ai_data
+        if heuristic_conf < 0.6:
             return ai_data
         merged = heuristic_data.copy()
         for key in ("amount", "category", "type", "date", "currency"):
@@ -653,21 +762,24 @@ def _analyse_text_blob(text: str) -> dict[str, Any]:
     if not cleaned:
         return {}
 
-    ai_data = None
+    ai_data: dict[str, Any] | None = None
     if settings.openai_api_key:
         ai_data = _call_openai_structured(cleaned)
         if ai_data and ai_data.get("amount"):
-            logger.info("Parsed receipt data (via OpenAI): %s", ai_data)
             ai_data["description"] = ""
             if not ai_data.get("currency"):
                 ai_data["currency"] = _detect_currency(cleaned) or settings.default_currency
-            return ai_data
 
     heuristic_data = _heuristic_parse(cleaned)
     if heuristic_data:
         logger.info("Parsed receipt data (heuristic): %s", heuristic_data)
         heuristic_data["description"] = ""
-        return heuristic_data
+
+    merged = _merge_results(ai_data, heuristic_data)
+    if merged:
+        source = "OpenAI+heuristic" if ai_data and heuristic_data else ("OpenAI" if ai_data else "heuristic")
+        logger.info("Parsed receipt data (%s): %s", source, merged)
+        return merged
 
     fallback = _fallback_parse(cleaned)
     fallback["description"] = ""
