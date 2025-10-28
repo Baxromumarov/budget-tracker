@@ -121,6 +121,12 @@ def delete_transaction(db: Session, transaction: TransactionModel) -> None:
     db.commit()
 
 
+def delete_transactions_for_user(db: Session, user_id: int) -> int:
+    count = db.query(TransactionModel).filter(TransactionModel.user_id == user_id).delete()
+    db.commit()
+    return count
+
+
 def build_domain_transaction(model: TransactionModel) -> Transaction:
     return domain_transaction_from_model(model)
 

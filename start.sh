@@ -83,6 +83,38 @@ ensure_uv() {
   command -v uv >/dev/null 2>&1
 }
 
+ensure_tesseract() {
+  if command -v tesseract >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "⚙️  Tesseract OCR not detected. Attempting installation..."
+  if command -v apt-get >/dev/null 2>&1; then
+    if ! apt-get update; then
+      echo "ℹ️  apt-get update failed while installing Tesseract."
+      return 1
+    fi
+    if ! apt-get install -y tesseract-ocr libtesseract-dev; then
+      echo "ℹ️  apt-get install tesseract-ocr failed."
+      return 1
+    fi
+  elif command -v apk >/dev/null 2>&1; then
+    if ! apk add --no-cache tesseract-ocr; then
+      echo "ℹ️  apk add tesseract-ocr failed."
+      return 1
+    fi
+  elif command -v brew >/dev/null 2>&1; then
+    if ! brew install tesseract; then
+      echo "ℹ️  brew install tesseract failed."
+      return 1
+    fi
+  else
+    echo "ℹ️  Please install Tesseract OCR manually (https://tesseract-ocr.github.io/) for receipt parsing."
+    return 1
+  fi
+  command -v tesseract >/dev/null 2>&1
+}
+
 PYTHON_BOOTSTRAP="$(command -v python3 || command -v python || true)"
 if [ -z "$PYTHON_BOOTSTRAP" ]; then
   if PYTHON_BOOTSTRAP="$(ensure_python)"; then
@@ -99,6 +131,10 @@ if ensure_uv; then
 else
   USE_UV=0
   echo "ℹ️  Continuing with Python's venv/pip fallback."
+fi
+
+if ! ensure_tesseract; then
+  echo "⚠️  Tesseract installation failed; image receipts may not be parsed."
 fi
 
 if [ "$USE_UV" -eq 1 ]; then
@@ -144,7 +180,7 @@ Bot controls:
 • Send text such as "Coffee 5.20" or drop a receipt photo.
 • I auto-detect category/type/amount and store it against your Telegram profile.
 • Commands: /report for summaries by period, /recent for last entries, /help for tips.
-• Drop receipts without text—the bot reads them via GPT-4o.
+• Drop receipts without text—the bot reads them via local Tesseract OCR.
 • Inline buttons offer quick monthly breakdowns (1, 3, 6, 12 months, YTD).
 EOF
     exec "$VENV_PY" -m app.telegram_bot

@@ -15,6 +15,7 @@ Full-stack expense tracking platform based on the provided project brief. The sy
 
 - Python 3.11+
 - PostgreSQL 13+
+- Tesseract OCR 5+ (automatically installed in Docker; required locally for receipt parsing)
 
 ### Local setup
 
@@ -46,9 +47,9 @@ The backend reads configuration from `.env` or your shell:
 - `ACCESS_TOKEN_EXPIRE_MINUTES` – Session lifetime in minutes.
 - `ALLOW_ORIGINS` – CORS allow-list (JSON string or comma-separated list).
 - `TELEGRAM_BOT` – Telegram bot token from @BotFather.
-- `OPENAI_API_KEY` – Required for AI-powered parsing (text and receipts).
+- `OPENAI_API_KEY` – Optional; enable if you want GPT to refine OCR output.
+- `AI_MODEL` – Optional; OpenAI model identifier (default `gpt-4o-mini`).
 - `DEFAULT_CURRENCY` – Display currency used in bot messages.
-- `AI_MODEL` – OpenAI Responses model name (defaults to `gpt-4o-mini`).
 
 ### Linting
 
@@ -140,9 +141,10 @@ Currently there are no automated tests. Recommended smoke checks:
 
 ## Telegram Bot
 
-- Start with `SERVICE=bot ./start.sh` (or `SERVICE=telegram-bot ./start.sh`) after configuring `TELEGRAM_BOT` and `OPENAI_API_KEY`.
+- Start with `SERVICE=bot ./start.sh` (or `SERVICE=telegram-bot ./start.sh`) after configuring `TELEGRAM_BOT`.
 - Auto-onboards Telegram users into the main database and links their chat metadata.
-- Understands free-form text and receipt photos using OpenAI, with keyword fallbacks when AI is unavailable.
+- Understands free-form text; receipt photos are read locally via Tesseract OCR, then optionally refined by OpenAI for totals/dates/categories when you supply an API key.
+- Presents a confirmation summary for OCR’d receipts so you can approve or edit before the entry is saved.
 - Auto-categorises expenses/income, stores confidence markers, and highlights low-confidence imports in the description.
 - Provides `/report`, `/recent`, and `/help` commands plus inline buttons for current, 3, 6, and 12-month summaries or year-to-date stats.
 - Replies with multi-month breakdowns, top categories, and the currency noted in the receipt when it differs from `DEFAULT_CURRENCY`.

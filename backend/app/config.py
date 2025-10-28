@@ -1,10 +1,11 @@
 from functools import lru_cache
 import json
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 _ENV_CANDIDATES = (
     Path(__file__).resolve().parent.parent.parent / ".env",
@@ -36,12 +37,12 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
-    telegram_bot_token: str | None = None
-    openai_api_key: str | None = None
+    telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     default_currency: str = "USD"
     ai_model: str = "gpt-4o-mini"
 
-    model_config = SettingsConfigDict(env_file=None)
+    model_config = SettingsConfigDict(env_file=None, populate_by_name=True)
 
     @field_validator("allow_origins", mode="before")
     @classmethod
@@ -57,6 +58,14 @@ class Settings(BaseSettings):
         if isinstance(value, (list, tuple)):
             return [str(item) for item in value]
         raise ValueError("Invalid allow_origins format.")
+
+    @model_validator(mode="after")
+    def populate_from_env(self) -> "Settings":
+        if not self.telegram_bot_token:
+            self.telegram_bot_token = os.getenv("TELEGRAM_BOT")
+        if not self.openai_api_key:
+            self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        return self
 
 
 @lru_cache
