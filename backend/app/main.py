@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .db import Base, engine
+from .migrations import run_migrations
 from .routers import auth, reports, transactions, users
 
 settings = get_settings()
@@ -26,6 +27,7 @@ app.include_router(reports.router, prefix=settings.api_prefix)
 def on_startup() -> None:
     """Ensure database tables exist."""
     Base.metadata.create_all(bind=engine)
+    run_migrations(engine)
 
 
 @app.get("/")

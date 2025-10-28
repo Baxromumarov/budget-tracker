@@ -27,6 +27,8 @@ def get_monthly_summary(
         total_expenses=summary["total_expenses"],
         balance=summary["balance"],
         top_category=summary["top_category"],
+        totals_by_currency=summary["totals_by_currency"],
+        monthly_totals=summary["monthly_totals"],
     )
 
 

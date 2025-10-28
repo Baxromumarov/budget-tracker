@@ -704,8 +704,13 @@ def _coerce_transaction(data: dict[str, Any]) -> tuple[TransactionCreate, dict[s
         except ValueError:
             pass
 
+    raw_currency = data.get("currency") or settings.default_currency
+    currency_code = str(raw_currency).strip().upper() if raw_currency else settings.default_currency.upper()
+    if len(currency_code) != 3:
+        currency_code = settings.default_currency.upper()
+
     extra = {
-        "currency": data.get("currency") or settings.default_currency,
+        "currency": currency_code,
         "confidence": float(data.get("confidence") or 0.0),
     }
 
@@ -715,28 +720,36 @@ def _coerce_transaction(data: dict[str, Any]) -> tuple[TransactionCreate, dict[s
         category=normalized_category,
         type=type_value,
         description=description,
+        currency=currency_code,
     )
     return tx, extra
 
 
 def _store_transaction(user_id: int, transaction: TransactionCreate, extra: dict[str, Any]) -> tuple[int, int]:
     with SessionLocal() as db:
-        description = transaction.description or ""
-        if extra.get("currency") and extra["currency"] != settings.default_currency:
-            currency_note = f" [{extra['currency']}]"
-            description = f"{description}{currency_note}"[:255]
-        if extra.get("confidence") < CONFIDENCE_THRESHOLD:
-            description = f"{description} (needs review)"[:255]
+        currency_code = str(extra.get("currency") or settings.default_currency).upper()
+        if len(currency_code) != 3:
+            currency_code = settings.default_currency.upper()
+
+        description_parts: list[str] = []
+        base_description = (transaction.description or "").strip()
+        if base_description:
+            description_parts.append(base_description)
+        if float(extra.get("confidence", 1.0)) < CONFIDENCE_THRESHOLD:
+            description_parts.append("needs review")
+        description_text = "; ".join(description_parts)[:255]
+
+        tx_data = transaction.model_copy(
+            update={
+                "description": description_text,
+                "currency": currency_code,
+            }
+        )
+
         tx = crud.create_transaction(
             db,
             user_id=user_id,
-            data=TransactionCreate(
-                amount=transaction.amount,
-                date=transaction.date,
-                category=transaction.category,
-                type=transaction.type,
-                description=description or "",
-            ),
+            data=tx_data,
         )
         total = crud.count_transactions(db, user_id)
         return tx.id, total
@@ -825,8 +838,7 @@ async def _process_payload(
             f"• Type: {transaction.type.capitalize()}\n"
             f"• Amount: {transaction.amount:.2f} {extra['currency']}\n"
             f"• Category: {transaction.category}\n"
-            f"• Date: {transaction.date.isoformat()}\n"
-            f"• Description: {transaction.description}\n\n"
+            f"• Date: {transaction.date.isoformat()}\n\n"
             "Is this correct?"
         )
         keyboard = InlineKeyboardMarkup(
@@ -1188,9 +1200,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
     elif data == "action:report_current":
         header, monthly_rows = await asyncio.to_thread(_period_summary, user.id, 1)
-        monthly_text = "\n".join(
-            f"• {month}: income {inc:.2f}, expenses {exp:.2f}" for month, inc, exp in monthly_rows
-        ) or "No data yet."
+        monthly_text = "\n".join(monthly_rows) or "No monthly data yet."
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("🔙 Back", callback_data="menu:back")]]
         )
@@ -1230,10 +1240,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("Unsupported report selection.")
             return
         header, monthly_rows = await asyncio.to_thread(_period_summary, user.id, months)
-        monthly_text = "\n".join(
-            f"• {month}: income {inc:.2f}, expenses {exp:.2f}"
-            for month, inc, exp in monthly_rows
-        ) or "No monthly data yet."
+        monthly_text = "\n".join(monthly_rows) or "No monthly data yet."
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("🔙 Back to Reports",
                                    callback_data="menu:reports")]]
@@ -1251,7 +1258,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("No transactions recorded yet.")
             return
         lines = [
-            f"#{tx.id} {tx.date:%Y-%m-%d} • {tx.kind.value.capitalize()} • {tx.amount:.2f} – {tx.category}"
+            f"#{tx.id} {tx.date:%Y-%m-%d} • {tx.kind.value.capitalize()} • {tx.amount:.2f} {getattr(tx, 'currency', settings.default_currency).upper()} – {tx.category}"
             for tx in transactions
         ]
         keyboard = InlineKeyboardMarkup(
@@ -1280,7 +1287,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         lines = [
-            f"#{tx.id} {tx.date:%Y-%m-%d} • {tx.kind.value.capitalize()} • {tx.amount:.2f} {settings.default_currency} – {tx.category}\n  {tx.description[:50]}"
+            f"#{tx.id} {tx.date:%Y-%m-%d} • {tx.kind.value.capitalize()} • {tx.amount:.2f} "
+            f"{getattr(tx, 'currency', settings.default_currency).upper()} – {tx.category}\n  {(tx.description or '')[:50]}"
             for tx in transactions[:20]  # Limit to 20 for display
         ]
         keyboard = InlineKeyboardMarkup(
