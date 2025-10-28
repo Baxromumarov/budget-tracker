@@ -57,6 +57,7 @@ class TransactionModel(Base):
     date: Mapped[datetime] = mapped_column(Date, nullable=False)
     category: Mapped[str] = mapped_column(String(120), nullable=False)
     kind: Mapped[TransactionKind] = mapped_column(Enum(TransactionKind, name="transaction_kind"), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD", server_default="USD")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

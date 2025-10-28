@@ -145,8 +145,9 @@ Currently there are no automated tests. Recommended smoke checks:
 - Auto-onboards Telegram users into the main database and links their chat metadata.
 - Understands free-form text; receipt photos are read locally via Tesseract OCR, then optionally refined by OpenAI for totals/dates/categories when you supply an API key.
 - Presents a confirmation summary for OCR’d receipts so you can approve or edit before the entry is saved.
-- Auto-categorises expenses/income, stores confidence markers, and highlights low-confidence imports in the description.
+- Auto-categorises expenses/income, stores confidence markers, and resolves currency automatically (USD/EUR/GBP/INR/etc. based on symbols or codes).
 - Provides `/report`, `/recent`, and `/help` commands plus inline buttons for current, 3, 6, and 12-month summaries or year-to-date stats.
+- Offers post-save quick actions (add another, view this month, undo) and a “Clear History” menu button to wipe the current ledger when needed.
 - Replies with multi-month breakdowns, top categories, and the currency noted in the receipt when it differs from `DEFAULT_CURRENCY`.
 
 ## Automation

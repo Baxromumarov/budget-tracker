@@ -1,4 +1,5 @@
-from datetime import date
+from collections import defaultdict
+from datetime import date, timedelta
 
 from sqlalchemy import extract, func, select, update
 from sqlalchemy.orm import Session
@@ -10,6 +11,9 @@ from .domain.entities import (
     domain_transaction_from_model,
 )
 from .models import TelegramProfileModel, TransactionKind, TransactionModel, UserModel
+from .config import get_settings
+
+settings = get_settings()
 from .schemas import TransactionCreate, TransactionType, TransactionUpdate, UserRegister
 
 
@@ -50,12 +54,14 @@ def list_users(db: Session) -> list[UserModel]:
 
 def create_transaction(db: Session, user_id: int, data: TransactionCreate) -> TransactionModel:
     kind = TransactionKind(data.type)
+    currency = (data.currency or settings.default_currency).upper()
     transaction = TransactionModel(
         user_id=user_id,
         amount=data.amount,
         date=data.date,
         category=data.category,
         kind=kind,
+        currency=currency,
         description=data.description,
     )
     db.add(transaction)
@@ -102,6 +108,8 @@ def update_transaction(
     changes = data.dict(exclude_unset=True)
     if "type" in changes:
         changes["kind"] = TransactionKind(changes.pop("type"))
+    if "currency" in changes and changes["currency"]:
+        changes["currency"] = str(changes["currency"]).upper()
 
     if changes:
         stmt = (
@@ -125,6 +133,64 @@ def delete_transactions_for_user(db: Session, user_id: int) -> int:
     count = db.query(TransactionModel).filter(TransactionModel.user_id == user_id).delete()
     db.commit()
     return count
+
+
+def delete_transaction_by_id(db: Session, transaction_id: int, user_id: int) -> bool:
+    tx = (
+        db.query(TransactionModel)
+        .filter(TransactionModel.id == transaction_id, TransactionModel.user_id == user_id)
+        .first()
+    )
+    if not tx:
+        return False
+    db.delete(tx)
+    db.commit()
+    return True
+
+
+def count_transactions(db: Session, user_id: int) -> int:
+    return db.query(func.count(TransactionModel.id)).filter(TransactionModel.user_id == user_id).scalar() or 0
+
+
+def aggregate_transactions(transactions: list[TransactionModel]) -> dict[str, object]:
+    income_by_currency: defaultdict[str, float] = defaultdict(float)
+    expenses_by_currency: defaultdict[str, float] = defaultdict(float)
+    category_totals: defaultdict[str, float] = defaultdict(float)
+    monthly_totals: defaultdict[str, defaultdict[str, dict[str, float]]] = defaultdict(
+        lambda: defaultdict(lambda: {"income": 0.0, "expenses": 0.0})
+    )
+
+    for tx in transactions:
+        currency = (getattr(tx, "currency", None) or settings.default_currency).upper()
+        amount = float(tx.amount)
+        month_key = tx.date.strftime("%Y-%m") if isinstance(tx.date, date) else str(tx.date)
+
+        if tx.kind == TransactionKind.INCOME:
+            income_by_currency[currency] += amount
+            monthly_totals[month_key][currency]["income"] += amount
+        else:
+            expenses_by_currency[currency] += amount
+            monthly_totals[month_key][currency]["expenses"] += amount
+
+        category_totals[tx.category] += amount
+
+    # Convert nested default dicts to plain dicts with floats
+    monthly_serializable: dict[str, dict[str, dict[str, float]]] = {}
+    for month_key, currency_map in monthly_totals.items():
+        monthly_serializable[month_key] = {
+            currency: {
+                "income": float(values["income"]),
+                "expenses": float(values["expenses"]),
+            }
+            for currency, values in currency_map.items()
+        }
+
+    return {
+        "income_by_currency": dict(income_by_currency),
+        "expenses_by_currency": dict(expenses_by_currency),
+        "category_totals": dict(category_totals),
+        "monthly_totals": monthly_serializable,
+    }
 
 
 def build_domain_transaction(model: TransactionModel) -> Transaction:
@@ -181,44 +247,48 @@ def update_telegram_profile(
 
 
 def calculate_monthly_summary(db: Session, user_id: int, month: int, year: int) -> dict[str, float | None]:
-    income_stmt = (
-        select(func.coalesce(func.sum(TransactionModel.amount), 0.0))
-        .where(
-            TransactionModel.user_id == user_id,
-            TransactionModel.kind == TransactionKind.INCOME,
-            extract("month", TransactionModel.date) == month,
-            extract("year", TransactionModel.date) == year,
-        )
-    )
-    expense_stmt = (
-        select(func.coalesce(func.sum(TransactionModel.amount), 0.0))
-        .where(
-            TransactionModel.user_id == user_id,
-            TransactionModel.kind == TransactionKind.EXPENSE,
-            extract("month", TransactionModel.date) == month,
-            extract("year", TransactionModel.date) == year,
-        )
-    )
-    top_category_stmt = (
-        select(TransactionModel.category, func.sum(TransactionModel.amount).label("total"))
-        .where(
-            TransactionModel.user_id == user_id,
-            extract("month", TransactionModel.date) == month,
-            extract("year", TransactionModel.date) == year,
-        )
-        .group_by(TransactionModel.category)
-        .order_by(func.sum(TransactionModel.amount).desc())
+    start_date = date(year, month, 1)
+    if month == 12:
+        end_date = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end_date = date(year, month + 1, 1) - timedelta(days=1)
+
+    transactions = list_transactions(
+        db,
+        user_id=user_id,
+        start_date=start_date,
+        end_date=end_date,
     )
 
-    total_income = db.scalar(income_stmt) or 0.0
-    total_expenses = db.scalar(expense_stmt) or 0.0
-    balance = total_income - total_expenses
-    top_category_row = db.execute(top_category_stmt).first()
-    top_category = top_category_row[0] if top_category_row else None
+    aggregated = aggregate_transactions(transactions)
+    income_by_currency = aggregated["income_by_currency"]
+    expenses_by_currency = aggregated["expenses_by_currency"]
+    category_totals = aggregated["category_totals"]
+    monthly_totals = aggregated["monthly_totals"]
+
+    default_code = settings.default_currency.upper()
+    total_income_default = float(income_by_currency.get(default_code, 0.0))
+    total_expenses_default = float(expenses_by_currency.get(default_code, 0.0))
+
+    all_currencies = sorted(set(income_by_currency) | set(expenses_by_currency))
+    totals_by_currency = {
+        code: {
+            "income": float(income_by_currency.get(code, 0.0)),
+            "expenses": float(expenses_by_currency.get(code, 0.0)),
+            "balance": float(income_by_currency.get(code, 0.0) - expenses_by_currency.get(code, 0.0)),
+        }
+        for code in all_currencies
+    }
+
+    top_category = None
+    if category_totals:
+        top_category = max(category_totals.items(), key=lambda item: item[1])[0]
 
     return {
-        "total_income": float(total_income),
-        "total_expenses": float(total_expenses),
-        "balance": float(balance),
+        "total_income": total_income_default,
+        "total_expenses": total_expenses_default,
+        "balance": total_income_default - total_expenses_default,
         "top_category": top_category,
+        "totals_by_currency": totals_by_currency,
+        "monthly_totals": monthly_totals,
     }

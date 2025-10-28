@@ -139,6 +139,26 @@ DATE_PATTERNS = [
     r"\b(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})\b",
 ]
 
+CURRENCY_SYMBOL_MAP = {
+    "$": "USD",
+    "€": "EUR",
+    "£": "GBP",
+    "₹": "INR",
+    "¥": "JPY",
+    "₩": "KRW",
+    "₽": "RUB",
+    "₺": "TRY",
+    "₫": "VND",
+    "₦": "NGN",
+    "R$": "BRL",
+    "A$": "AUD",
+    "C$": "CAD",
+}
+CURRENCY_CODE_REGEX = re.compile(
+    r"\b(USD|EUR|GBP|INR|JPY|AUD|CAD|CHF|NZD|SEK|NOK|DKK|SGD|HKD|RUB|TRY|BRL|ZAR|UZS)\b",
+    re.IGNORECASE,
+)
+
 AMOUNT_KEYWORD_WEIGHTS = {
     "invoice amount": 800,
     "total amount": 750,
@@ -163,6 +183,7 @@ REPORT_PRESETS: dict[str, int] = {
 
 CONFIDENCE_THRESHOLD = 0.55
 PENDING_TX_KEY = "pending_transaction"
+LAST_SAVED_TX_KEY = "last_saved_transaction"
 
 
 def _main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -317,12 +338,13 @@ def _fallback_parse(text: str) -> dict[str, Any]:
         category = "Entertainment"
     elif "shopping" in lowered or "store" in lowered or "shop" in lowered or "purchase" in lowered:
         category = "Shopping"
+    currency = _detect_currency(text) or settings.default_currency
     description = "" if text else "Telegram entry"
     # Determine confidence based on how well we matched
     confidence = 0.85 if amount is not None and category != "Other" else 0.5
     return {
         "amount": amount,
-        "currency": None,
+        "currency": currency,
         "type": type_,
         "category": category,
         "description": description,
@@ -337,10 +359,10 @@ def _call_openai_structured(text: str) -> dict[str, Any] | None:
         return None
 
     instructions = (
-        "You are an assistant that extracts structured expense data from receipts or chat text. "
-        "Respond with valid JSON only, matching this schema: "
-        "{""amount"": number, ""currency"": string|null, ""type"": ""expense""|""income"", ""category"": string|null, ""description"": string|null, ""date"": string|null}."
-        "Use ISO dates (YYYY-MM-DD) when possible, default type to \"expense\" if uncertain, and keep description under 120 characters."
+        "You extract structured expense data from receipts or chat messages. "
+        "Return ONLY valid JSON matching this schema: {\"amount\": number, \"currency\": string|null, \"type\": \"expense\"|\"income\", \"category\": string|null, \"description\": string|null, \"date\": string|null}. "
+        "Interpret shorthand like 2k=2000 or 1.5m=1500000, and detect currency symbols/codes returning ISO codes (USD, EUR, INR, UZS, etc.). "
+        "Use ISO dates (YYYY-MM-DD), default type to \"expense\" unless clearly income, and keep description <=120 characters."
     )
 
     try:
@@ -370,11 +392,13 @@ def _call_openai_structured(text: str) -> dict[str, Any] | None:
                 data["date"] = date.fromisoformat(str(data["date"])[:10]).isoformat()
             except ValueError:
                 data["date"] = None
-        if data.get("description"):
-            data["description"] = str(data["description"])[:120]
+        data["description"] = ""
         if not data.get("type"):
             data["type"] = "expense"
-        data.setdefault("currency", settings.default_currency)
+        if data.get("currency"):
+            data["currency"] = str(data["currency"]).upper()
+        else:
+            data["currency"] = _detect_currency(text) or settings.default_currency
         data["confidence"] = 0.9
         logger.info("OpenAI refined data: %s", data)
         return data
@@ -384,15 +408,37 @@ def _call_openai_structured(text: str) -> dict[str, Any] | None:
 
 
 def _normalise_amount(raw: str) -> float | None:
-    candidate = raw.replace(" ", "").replace(",", "")
+    candidate = raw.replace(",", "")
+    candidate_no_space = candidate.replace(" ", "")
+    suffix_match = re.fullmatch(r"(\d+(?:\.\d+)?)([kmb])", candidate_no_space.lower())
+    if suffix_match:
+        value = float(suffix_match.group(1))
+        multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[suffix_match.group(2)]
+        return round(value * multiplier, 2)
     try:
-        return round(float(candidate), 2)
+        return round(float(candidate_no_space), 2)
     except ValueError:
         return None
 
 
+def _detect_currency(text: str) -> str | None:
+    lowered = text.lower()
+    for symbol, code in CURRENCY_SYMBOL_MAP.items():
+        if symbol in text:
+            return code
+    match = CURRENCY_CODE_REGEX.search(text)
+    if match:
+        return match.group(1).upper()
+    if "uzs" in lowered or "so'm" in lowered or "sum" in lowered:
+        return "UZS"
+    return None
+
+
 def _extract_amount_from_text(text: str) -> tuple[float | None, float]:
-    pattern = re.compile(r"(\d{1,3}(?:[,\s]\d{3})+(?:\.\d{1,2})|\d+(?:\.\d{1,2})?)")
+    pattern = re.compile(
+        r"(\d{1,3}(?:[,\s]\d{3})+(?:\.\d{1,2})|\d+(?:\.\d{1,2})?)(?:\s*([kmb]))?",
+        re.IGNORECASE,
+    )
     best_value: float | None = None
     best_score = float("-inf")
 
@@ -408,11 +454,13 @@ def _extract_amount_from_text(text: str) -> tuple[float | None, float]:
             if keyword in lower:
                 keyword_bonus = max(keyword_bonus, weight)
         for match in pattern.finditer(line):
-            value = _normalise_amount(match.group(1))
+            base_value = match.group(1)
+            suffix = match.group(2) or ""
+            token = f"{base_value}{suffix}"
+            value = _normalise_amount(token)
             if value is None:
                 continue
-            token = match.group(1)
-            digits_only = re.sub(r"\D", "", token)
+            digits_only = re.sub(r"\D", "", base_value)
             if len(digits_only) >= 8 and "." not in token:
                 continue
             if value > 1_000_000:
@@ -523,6 +571,7 @@ def _heuristic_parse(text: str) -> dict[str, Any]:
         return {}
 
     category = _infer_category_from_text(text)
+    currency = _detect_currency(text) or settings.default_currency
     type_: TransactionType = "expense"
     lowered = text.lower()
     if any(term in lowered for term in ("salary", "income", "credited", "payment received")):
@@ -536,7 +585,7 @@ def _heuristic_parse(text: str) -> dict[str, Any]:
 
     return {
         "amount": amount,
-        "currency": None,
+        "currency": currency,
         "type": type_,
         "category": category,
         "description": "",
@@ -559,8 +608,7 @@ def _merge_results(ai_data: dict[str, Any] | None, heuristic_data: dict[str, Any
         for key in ("amount", "category", "type", "date", "currency"):
             if (not merged.get(key) or merged.get(key) == "Other") and ai_data.get(key):
                 merged[key] = ai_data[key]
-        if ai_data.get("description"):
-            merged["description"] = str(ai_data["description"])[:120]
+        merged["description"] = ""
         merged["confidence"] = max(heuristic_conf, float(ai_data.get("confidence", 0.0)))
         return merged
     return heuristic_data
@@ -605,18 +653,26 @@ def _analyse_text_blob(text: str) -> dict[str, Any]:
     if not cleaned:
         return {}
 
-    heuristic_data = _heuristic_parse(cleaned)
     ai_data = None
     if settings.openai_api_key:
         ai_data = _call_openai_structured(cleaned)
+        if ai_data and ai_data.get("amount"):
+            logger.info("Parsed receipt data (via OpenAI): %s", ai_data)
+            ai_data["description"] = ""
+            if not ai_data.get("currency"):
+                ai_data["currency"] = _detect_currency(cleaned) or settings.default_currency
+            return ai_data
 
-    merged = _merge_results(ai_data, heuristic_data)
-    if not merged:
-        merged = _fallback_parse(cleaned)
+    heuristic_data = _heuristic_parse(cleaned)
+    if heuristic_data:
+        logger.info("Parsed receipt data (heuristic): %s", heuristic_data)
+        heuristic_data["description"] = ""
+        return heuristic_data
 
-    logger.info("Parsed receipt data: %s", merged)
-    merged["description"] = ""
-    return merged
+    fallback = _fallback_parse(cleaned)
+    fallback["description"] = ""
+    logger.info("Parsed receipt data (fallback): %s", fallback)
+    return fallback
 
 
 def _coerce_transaction(data: dict[str, Any]) -> tuple[TransactionCreate, dict[str, Any]] | None:
@@ -663,7 +719,7 @@ def _coerce_transaction(data: dict[str, Any]) -> tuple[TransactionCreate, dict[s
     return tx, extra
 
 
-def _store_transaction(user_id: int, transaction: TransactionCreate, extra: dict[str, Any]) -> int:
+def _store_transaction(user_id: int, transaction: TransactionCreate, extra: dict[str, Any]) -> tuple[int, int]:
     with SessionLocal() as db:
         description = transaction.description or ""
         if extra.get("currency") and extra["currency"] != settings.default_currency:
@@ -682,13 +738,28 @@ def _store_transaction(user_id: int, transaction: TransactionCreate, extra: dict
                 description=description or "",
             ),
         )
-        return tx.id
+        total = crud.count_transactions(db, user_id)
+        return tx.id, total
 
 
 def _clear_user_transactions(user_id: int) -> int:
     with SessionLocal() as db:
         return crud.delete_transactions_for_user(db, user_id)
 
+
+def _delete_transaction(user_id: int, transaction_id: int) -> bool:
+    with SessionLocal() as db:
+        return crud.delete_transaction_by_id(db, transaction_id, user_id)
+
+
+def _post_save_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("➕ Add Another", callback_data="action:add")],
+            [InlineKeyboardButton("📊 This Month", callback_data="action:report_current")],
+            [InlineKeyboardButton("↩️ Undo", callback_data="action:undo")],
+        ]
+    )
 
 async def _process_payload(
     update: Update,
@@ -741,6 +812,8 @@ async def _process_payload(
         return
 
     transaction, extra = parsed
+    if not extra.get("currency"):
+        extra["currency"] = settings.default_currency
     if require_confirmation:
         context.user_data[PENDING_TX_KEY] = {
             "user_id": user.id,
@@ -771,7 +844,8 @@ async def _process_payload(
         )
         return
 
-    tx_id = await asyncio.to_thread(_store_transaction, user.id, transaction, extra)
+    tx_id, ordinal = await asyncio.to_thread(_store_transaction, user.id, transaction, extra)
+    context.user_data[LAST_SAVED_TX_KEY] = {"transaction_id": tx_id, "user_id": user.id, "ordinal": ordinal}
 
     confidence_note = ""
     if extra["confidence"] < CONFIDENCE_THRESHOLD:
@@ -779,13 +853,15 @@ async def _process_payload(
 
     await update.effective_chat.send_message(
         (
-            f"✅ Saved *{transaction.type.capitalize()}* #{tx_id}\n"
+            f"✅ Saved *{transaction.type.capitalize()}* #{ordinal}\n"
             f"• Amount: {transaction.amount:.2f} {extra['currency']}\n"
             f"• Category: {transaction.category}\n"
             f"• Date: {transaction.date.isoformat()}"
-            f"{confidence_note}"
+            f"{confidence_note}\n\n"
+            "Choose a next step below."
         ),
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_post_save_keyboard(),
     )
 
 
@@ -798,7 +874,18 @@ def _subtract_months(base: date, months: int) -> date:
     return date(year, month, day)
 
 
-def _period_summary(user_id: int, months: int) -> tuple[str, list[tuple[str, float, float]]]:
+def _format_currency_totals(income_map: dict[str, float], expense_map: dict[str, float]) -> list[str]:
+    lines: list[str] = []
+    currencies = sorted(set(income_map) | set(expense_map))
+    for code in currencies:
+        income = income_map.get(code, 0.0)
+        expenses = expense_map.get(code, 0.0)
+        balance = income - expenses
+        lines.append(f"{code}: income {income:.2f}, expenses {expenses:.2f}, balance {balance:.2f}")
+    return lines
+
+
+def _period_summary(user_id: int, months: int) -> tuple[str, list[str]]:
     today = date.today()
     if months == -1:  # year to date
         start_date = today.replace(month=1, day=1)
@@ -809,36 +896,38 @@ def _period_summary(user_id: int, months: int) -> tuple[str, list[tuple[str, flo
         transactions = crud.list_transactions(
             db, user_id=user_id, start_date=start_date, end_date=today)
 
-    income = sum(t.amount for t in transactions if t.kind.value == "income")
-    expenses = sum(t.amount for t in transactions if t.kind.value == "expense")
-    balance = income - expenses
+    aggregated = crud.aggregate_transactions(transactions)
+    income_map: dict[str, float] = aggregated["income_by_currency"]
+    expense_map: dict[str, float] = aggregated["expenses_by_currency"]
+    category_totals: dict[str, float] = aggregated["category_totals"]
+    monthly_totals: dict[str, dict[str, dict[str, float]]] = aggregated["monthly_totals"]
 
-    categories: dict[str, float] = {}
-    monthly: dict[str, tuple[float, float]] = {}
-    for tx in transactions:
-        month_key = tx.date.strftime("%Y-%m")
-        income_sum, expense_sum = monthly.get(month_key, (0.0, 0.0))
-        if tx.kind.value == "income":
-            income_sum += tx.amount
-        else:
-            expense_sum += tx.amount
-        monthly[month_key] = (income_sum, expense_sum)
-        categories[tx.category] = categories.get(tx.category, 0.0) + tx.amount
+    header_lines = [f"📊 *Summary* ({start_date:%Y-%m-%d} → {today:%Y-%m-%d})"]
+    currency_lines = _format_currency_totals(income_map, expense_map)
+    if currency_lines:
+        header_lines.extend(currency_lines)
+    else:
+        header_lines.append("No transactions recorded yet.")
 
     top_categories = sorted(
-        categories.items(), key=lambda item: item[1], reverse=True)[:3]
+        category_totals.items(), key=lambda item: item[1], reverse=True)[:3]
     top_categories_text = "\n".join(
         f"• {name}: {amount:.2f}" for name, amount in top_categories) or "• No data yet"
-    monthly_rows = sorted(monthly.items())
+    header_lines.append("\n🥇 *Top categories*")
+    header_lines.append(top_categories_text)
+    header_lines.append("\n(No currency conversion applied; values remain in their native currencies.)")
 
-    header = (
-        f"📊 *Summary* ({start_date:%Y-%m-%d} → {today:%Y-%m-%d})\n"
-        f"Income: {income:.2f} {settings.default_currency}\n"
-        f"Expenses: {expenses:.2f} {settings.default_currency}\n"
-        f"Balance: {balance:.2f} {settings.default_currency}\n\n"
-        f"🥇 *Top categories*\n{top_categories_text}"
-    )
-    return header, [(month, inc, exp) for month, (inc, exp) in monthly_rows]
+    monthly_rows: list[str] = []
+    for month_key in sorted(monthly_totals.keys()):
+        currency_parts = []
+        for code in sorted(monthly_totals[month_key].keys()):
+            info = monthly_totals[month_key][code]
+            currency_parts.append(
+                f"{code} income {info['income']:.2f}, expenses {info['expenses']:.2f}"
+            )
+        monthly_rows.append(f"• {month_key}: " + "; ".join(currency_parts))
+
+    return "\n".join(header_lines), monthly_rows
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -858,7 +947,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• Send text or photo to add a transaction\n"
         "• Use buttons below for reports and transactions\n"
         "• Or use commands: /report, /transactions, /help",
-        reply_markup=keyboard,
+        reply_markup=_main_menu_keyboard(),
         parse_mode=ParseMode.MARKDOWN,
     )
     context.user_data["bot_user_id"] = user.id
@@ -1078,7 +1167,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
     elif data == "clear:cancel":
         await query.edit_message_text(
-            "Deletion cancelled.", reply_markup=_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN
+                "Deletion cancelled.", reply_markup=_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN
         )
     elif data == "clear:yes":
         deleted = await asyncio.to_thread(_clear_user_transactions, user.id)
@@ -1091,6 +1180,49 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 chat_id=query.message.chat_id,
                 text="✅ Your history is clean.",
                 reply_markup=_main_menu_keyboard(),
+            )
+    elif data == "action:add":
+        await query.edit_message_text(
+            "👍 Ready! Send the next transaction as text or drop another receipt.",
+            reply_markup=None,
+        )
+    elif data == "action:report_current":
+        header, monthly_rows = await asyncio.to_thread(_period_summary, user.id, 1)
+        monthly_text = "\n".join(
+            f"• {month}: income {inc:.2f}, expenses {exp:.2f}" for month, inc, exp in monthly_rows
+        ) or "No data yet."
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔙 Back", callback_data="menu:back")]]
+        )
+        await query.edit_message_text(
+            f"{header}\n\n📆 *Monthly breakdown*\n{monthly_text}",
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    elif data == "action:undo":
+        last_tx = context.user_data.get(LAST_SAVED_TX_KEY)
+        if not last_tx:
+            await query.edit_message_text(
+                "No recent transaction to undo.", reply_markup=None
+            )
+            return
+        removed = await asyncio.to_thread(
+            _delete_transaction, last_tx["user_id"], last_tx["transaction_id"]
+        )
+        if removed:
+            await query.edit_message_text(
+                "↩️ Last transaction removed.", reply_markup=None
+            )
+            context.user_data.pop(LAST_SAVED_TX_KEY, None)
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="You can continue logging expenses.",
+                reply_markup=_main_menu_keyboard(),
+            )
+        else:
+            await query.edit_message_text(
+                "Couldn't undo the last transaction (maybe already cleared).",
+                reply_markup=None,
             )
     elif data.startswith("report:"):
         months = REPORT_PRESETS.get(data)
@@ -1164,25 +1296,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         transaction = TransactionCreate(**pending["transaction"])
         extra = pending["extra"]
-        tx_id = await asyncio.to_thread(_store_transaction, pending["user_id"], transaction, extra)
+        if not extra.get("currency"):
+            extra["currency"] = settings.default_currency
+        tx_id, ordinal = await asyncio.to_thread(_store_transaction, pending["user_id"], transaction, extra)
+        context.user_data[LAST_SAVED_TX_KEY] = {
+            "transaction_id": tx_id,
+            "user_id": pending["user_id"],
+            "ordinal": ordinal,
+        }
         confidence_note = ""
         if extra.get("confidence", 1.0) < CONFIDENCE_THRESHOLD:
             confidence_note = "\n⚠️ Confidence was low, please double-check in the app."
         await query.edit_message_text(
             (
-                f"✅ Saved *{transaction.type.capitalize()}* #{tx_id}\n"
+                f"✅ Saved *{transaction.type.capitalize()}* #{ordinal}\n"
                 f"• Amount: {transaction.amount:.2f} {extra['currency']}\n"
                 f"• Category: {transaction.category}\n"
                 f"• Date: {transaction.date.isoformat()}"
-                f"{confidence_note}"
+                f"{confidence_note}\n\nChoose a next step below."
             ),
             parse_mode=ParseMode.MARKDOWN,
+            reply_markup=_post_save_keyboard(),
         )
-        if query.message:
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="✅ Transaction saved to your ledger.",
-            )
     elif data == "confirm:no":
         pending = context.user_data.get(PENDING_TX_KEY)
         if not pending:

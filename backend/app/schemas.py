@@ -49,6 +49,7 @@ class TransactionBase(BaseModel):
     category: str = Field(min_length=1, max_length=120)
     type: TransactionType
     description: Optional[str] = Field(default=None, max_length=255)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
 
 
 class TransactionCreate(TransactionBase):
@@ -61,6 +62,7 @@ class TransactionUpdate(BaseModel):
     category: Optional[str] = Field(default=None, min_length=1, max_length=120)
     type: Optional[TransactionType] = None
     description: Optional[str] = Field(default=None, max_length=255)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
 
 
 class TransactionOut(TransactionBase):
@@ -78,3 +80,5 @@ class MonthlySummary(BaseModel):
     total_expenses: float
     balance: float
     top_category: Optional[str]
+    totals_by_currency: dict[str, dict[str, float]] = Field(default_factory=dict)
+    monthly_totals: dict[str, dict[str, dict[str, float]]] = Field(default_factory=dict)
