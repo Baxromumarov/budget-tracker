@@ -1026,12 +1026,14 @@ def _period_summary(user_id: int, months: int) -> tuple[str, list[str]]:
     category_totals: dict[str, float] = aggregated["category_totals"]
     monthly_totals: dict[str, dict[str, dict[str, float]]] = aggregated["monthly_totals"]
 
-    header_lines = [f"📊 *Summary* ({start_date:%Y-%m-%d} → {today:%Y-%m-%d})"]
+    header_lines: list[str] = [f"📊 *Summary* ({start_date:%Y-%m-%d} → {today:%Y-%m-%d})"]
+
     currency_lines = _format_currency_totals(income_map, expense_map)
     if currency_lines:
-        header_lines.extend(currency_lines)
+        header_lines.append("\n💰 *Totals by currency*")
+        header_lines.extend(f"• {line}" for line in currency_lines)
     else:
-        header_lines.append("No transactions recorded yet.")
+        header_lines.append("\nNo transactions recorded yet.")
 
     top_categories = sorted(
         category_totals.items(), key=lambda item: item[1], reverse=True)[:3]
@@ -1039,17 +1041,18 @@ def _period_summary(user_id: int, months: int) -> tuple[str, list[str]]:
         f"• {name}: {amount:.2f}" for name, amount in top_categories) or "• No data yet"
     header_lines.append("\n🥇 *Top categories*")
     header_lines.append(top_categories_text)
-    header_lines.append("\n(No currency conversion applied; values remain in their native currencies.)")
+    header_lines.append("\nℹ️ No currency conversion applied; values stay in their native currencies.")
 
     monthly_rows: list[str] = []
     for month_key in sorted(monthly_totals.keys()):
-        currency_parts = []
+        row_lines = [f"• {month_key}"]
         for code in sorted(monthly_totals[month_key].keys()):
             info = monthly_totals[month_key][code]
-            currency_parts.append(
-                f"{code} income {info['income']:.2f}, expenses {info['expenses']:.2f}"
+            balance = info["income"] - info["expenses"]
+            row_lines.append(
+                f"  ↳ {code}: income {info['income']:.2f}, expenses {info['expenses']:.2f}, balance {balance:.2f}"
             )
-        monthly_rows.append(f"• {month_key}: " + "; ".join(currency_parts))
+        monthly_rows.append("\n".join(row_lines))
 
     return "\n".join(header_lines), monthly_rows
 
