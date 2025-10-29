@@ -10,7 +10,7 @@ import re
 import secrets
 from io import BytesIO
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -212,6 +212,23 @@ ADDRESS_NOISE_TOKENS = {
     "zip",
 }
 
+NUMBER_WORDS = {
+    "a": 1,
+    "an": 1,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
 REPORT_PRESETS: dict[str, int] = {
     "report:1": 1,   # current month
     "report:3": 3,   # last 3 months
@@ -404,10 +421,13 @@ def _call_openai_structured(text: str) -> dict[str, Any] | None:
         "\"category\": string|null, \"description\": string|null, \"date\": string|null}. "
         "Interpret shorthand like 2k=2000 or 1.5m=1500000. "
         "Detect currency symbols or context words and return ISO codes (INR, USD, EUR, etc.). "
-        "Use ISO dates (YYYY-MM-DD). "
+        "Classify the transaction into one of these categories exactly (case-sensitive): "
+        f"{json.dumps(DEFAULT_CATEGORIES)}. "
+        "Fallback to \"Other\" only when no reasonable match exists. "
+        "Use ISO dates (YYYY-MM-DD) and convert relative phrases (e.g. \"yesterday\", \"two days ago\", \"last week\") into concrete calendar dates before returning. "
         "Pick the *final payable amount* (labelled total / grand total / balance due). "
-        "If multiple totals exist, cross-check them: choose the one that fits logically with subtotal + taxes. "
-        "NEVER invent digits; prefer smaller realistic totals for restaurant receipts (<2000 INR unless stated otherwise). "
+        "If multiple totals exist, cross-check them: choose the one that fits with subtotal + taxes. "
+        "NEVER invent digits; prefer smaller realistic totals for restaurant receipts (<2000 INR unless clearly higher). "
         "If receipt shows GST, assume currency = INR. "
         "Do not output any explanatory text — JSON only."
     )
@@ -447,7 +467,12 @@ def _call_openai_structured(text: str) -> dict[str, Any] | None:
             try:
                 data["date"] = date.fromisoformat(str(data["date"])[:10]).isoformat()
             except ValueError:
-                data["date"] = None
+                relative = _extract_relative_date(str(data["date"]))
+                data["date"] = relative
+        if not data.get("date"):
+            inferred_relative = _extract_relative_date(text)
+            if inferred_relative:
+                data["date"] = inferred_relative
 
         # Description and type defaults
         data["description"] = data.get("description", "")[:120]
@@ -496,6 +521,69 @@ def _detect_currency(text: str) -> str | None:
         return match.group(1).upper()
     if "uzs" in lowered or "so'm" in lowered or "sum" in lowered:
         return "UZS"
+    return None
+
+
+def _parse_relative_quantity(token: str) -> int | None:
+    token = token.strip().lower()
+    if not token:
+        return None
+    if token.isdigit():
+        return int(token)
+    return NUMBER_WORDS.get(token)
+
+
+def _extract_relative_date(text: str) -> str | None:
+    lowered = text.lower()
+    today = date.today()
+
+    simple_phrases = [
+        ("day before yesterday", 2),
+        ("yesterday", 1),
+        ("today", 0),
+    ]
+    for phrase, offset in simple_phrases:
+        if phrase in lowered:
+            return (today - timedelta(days=offset)).isoformat()
+
+    if "last week" in lowered:
+        return (today - timedelta(weeks=1)).isoformat()
+    if "last fortnight" in lowered:
+        return (today - timedelta(days=14)).isoformat()
+    if "last month" in lowered:
+        return _subtract_months(today, 1).isoformat()
+    if "last year" in lowered:
+        try:
+            return today.replace(year=today.year - 1).isoformat()
+        except ValueError:
+            return today.replace(month=2, day=28, year=today.year - 1).isoformat()
+
+    patterns = [
+        (r"\b(\d+|[a-z]+)\s+day[s]?\s+ago\b", lambda qty: today - timedelta(days=qty)),
+        (r"\b(\d+|[a-z]+)\s+week[s]?\s+ago\b", lambda qty: today - timedelta(weeks=qty)),
+        (r"\b(\d+|[a-z]+)\s+month[s]?\s+ago\b", lambda qty: _subtract_months(today, qty)),
+        (
+            r"\b(\d+|[a-z]+)\s+year[s]?\s+ago\b",
+            lambda qty: today.replace(year=today.year - qty)
+            if not (today.month == 2 and today.day == 29 and qty % 4 != 0)
+            else today.replace(month=2, day=28, year=today.year - qty),
+        ),
+    ]
+
+    for pattern, compute in patterns:
+        match = re.search(pattern, lowered)
+        if not match:
+            continue
+        quantity = _parse_relative_quantity(match.group(1))
+        if quantity is None:
+            continue
+        try:
+            derived = compute(quantity)
+        except ValueError:
+            # Handle leap day edge cases by backing off to Feb 28
+            derived = today.replace(month=2, day=28, year=today.year - quantity)
+        return derived.isoformat()
+
     return None
 
 
@@ -684,7 +772,11 @@ def _heuristic_parse(text: str) -> dict[str, Any]:
         if category == "Other":
             category = "Salary"
 
-    potential_date = _extract_date_from_text(text) or date.today().isoformat()
+    potential_date = (
+        _extract_date_from_text(text)
+        or _extract_relative_date(text)
+        or date.today().isoformat()
+    )
 
     confidence = max(confidence, 0.85 if category != "Other" else 0.6)
 
